@@ -1,7 +1,10 @@
-﻿Imports JHSoftware.SimpleDNS.Plugin
+﻿Imports System.Threading.Tasks
+Imports JHSoftware.SimpleDNS.Plugin
 
 Public Class HostsFilePlugIn
-  Implements IGetHostPlugIn
+  Implements ILookupHost
+  Implements ILookupReverse
+  Implements IOptionsUI
   Implements IListsIPAddress
   Implements IListsDomainName
 
@@ -12,23 +15,15 @@ Public Class HostsFilePlugIn
 
   Private WithEvents fMon As System.IO.FileSystemWatcher
 
-#Region "events"
-  Public Event AsyncError(ByVal ex As System.Exception) Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.AsyncError
-  Public Event SaveConfig(ByVal config As String) Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.SaveConfig
-  Public Event LogLine(ByVal text As String) Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.LogLine
-#End Region
+  Public Property Host As IHost Implements IPlugInBase.Host
 
 #Region "not implemented"
-  Public Sub LoadState(ByVal stateXML As String) Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.LoadState
+  Public Sub LoadState(ByVal stateXML As String) Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.LoadState
   End Sub
 
-  Public Function SaveState() As String Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.SaveState
+  Public Function SaveState() As String Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.SaveState
     Return ""
   End Function
-
-  Public Sub LookupTXT(ByVal req As IDNSRequest, ByRef resultText As String, ByRef resultTTL As Integer) Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.LookupTXT
-    Throw New NotSupportedException
-  End Sub
 
 #End Region
 
@@ -36,16 +31,15 @@ Public Class HostsFilePlugIn
     With GetPlugInTypeInfo
       .Name = "Hosts File"
       .Description = "Retrieve host and reverse records from a standard ""hosts"" file"
-      .InfoURL = "http://www.simpledns.com/plugin-hostsfile"
-      .ConfigFile = False
+      .InfoURL = "https://simpledns.plus/kb/178/hosts-file-plug-in"
     End With
   End Function
 
-  Public Sub LoadConfig(ByVal config As String, ByVal instanceID As Guid, ByVal dataPath As String, ByRef maxThreads As Integer) Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.LoadConfig
+  Public Sub LoadConfig(ByVal config As String, ByVal instanceID As Guid, ByVal dataPath As String) Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.LoadConfig
     MyCfg = HFConfig.FromString(config)
   End Sub
 
-  Public Sub StartService() Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.StartService
+  Private Function StartService() As Task Implements IPlugInBase.StartService
     Load()
     If MyCfg.AutoReload Then
       fMon = New System.IO.FileSystemWatcher
@@ -55,7 +49,8 @@ Public Class HostsFilePlugIn
       fMon.NotifyFilter = IO.NotifyFilters.LastWrite
       fMon.EnableRaisingEvents = True
     End If
-  End Sub
+    Return Task.CompletedTask
+  End Function
 
   Private Sub Load()
     LastReload = DateTime.UtcNow
@@ -80,8 +75,8 @@ Public Class HostsFilePlugIn
     Dim x As String, i As Integer
     Dim ws As Char() = New Char() {" "c, ChrW(9)}
     Dim ip As System.Net.IPAddress = Nothing
-    Dim dom As DomainName = Nothing
-    Dim ip4 As IPAddressV4, ip6 As IPAddressV6
+    Dim dom As DomName = Nothing
+    Dim ip4 As SdnsIPv4, ip6 As SdnsIPv6
     While Not f.EndOfStream
       x = f.ReadLine
       i = x.IndexOf("#"c)
@@ -93,16 +88,16 @@ Public Class HostsFilePlugIn
       While x.Length > 0
         i = x.IndexOfAny(ws)
         If i < 0 Then i = x.Length
-        If Not DomainName.TryParse(x.Substring(0, i), dom) Then Exit While
+        If Not DomName.TryParse(x.Substring(0, i), dom) Then Exit While
         x = x.Substring(i).TrimStart
         If ip.AddressFamily = Net.Sockets.AddressFamily.InterNetwork Then
           REM ipv4
-          ip4 = New IPAddressV4(ip.GetAddressBytes)
+          ip4 = New SdnsIPv4(ip.GetAddressBytes)
           If Not tmpData.Fwd4.ContainsKey(dom) Then tmpData.Fwd4.Add(dom, ip4)
           If Not tmpData.Rev4.ContainsKey(ip4) Then tmpData.Rev4.Add(ip4, dom)
         Else
           REM ipv6
-          ip6 = New IPAddressV6(ip.GetAddressBytes)
+          ip6 = New SdnsIPv6(ip.GetAddressBytes)
           If Not tmpData.Fwd6.ContainsKey(dom) Then tmpData.Fwd6.Add(dom, ip6)
           If Not tmpData.Rev6.ContainsKey(ip6) Then tmpData.Rev6.Add(ip6, dom)
         End If
@@ -112,7 +107,7 @@ Public Class HostsFilePlugIn
     MyData = tmpData
   End Sub
 
-  Public Sub StopService() Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.StopService
+  Public Sub StopService() Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.StopService
     MyData = Nothing
     If fMon IsNot Nothing Then
       fMon.EnableRaisingEvents = False
@@ -121,32 +116,38 @@ Public Class HostsFilePlugIn
     End If
   End Sub
 
-  Public Sub Lookup(ByVal req As IDNSRequest, ByRef resultIP As IPAddress, ByRef resultTTL As Integer) Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.Lookup
-    If CType(req.QType, UShort) = 1US Then
-      Dim rIP As IPAddressV4 = Nothing
-      If MyData.Fwd4.TryGetValue(req.QName, rIP) Then resultIP = rIP Else resultIP = Nothing
+  Public Function LookupHost(req As IDNSRequest) As Task(Of LookupResult(Of SdnsIP)) Implements ILookupHost.LookupHost
+    Return Task.FromResult(LookupHost2(req))
+  End Function
+  Public Function LookupHost2(req As IDNSRequest) As LookupResult(Of SdnsIP)
+    If req.QType = DNSRecType.A Then
+      Dim rIP As SdnsIPv4 = Nothing
+      If MyData.Fwd4.TryGetValue(req.QName, rIP) Then Return New LookupResult(Of SdnsIP) With {.Value = rIP, .TTL = MyCfg.TTL}
     Else
-      Dim rIP As IPAddressV6 = Nothing
-      If MyData.Fwd6.TryGetValue(req.QName, rIP) Then resultIP = rIP Else resultIP = Nothing
+      Dim rIP As SdnsIPv6 = Nothing
+      If MyData.Fwd6.TryGetValue(req.QName, rIP) Then Return New LookupResult(Of SdnsIP) With {.Value = rIP, .TTL = MyCfg.TTL}
     End If
-    resultTTL = MyCfg.TTL
-  End Sub
+    Return Nothing
+  End Function
 
-  Public Sub LookupReverse(ByVal req As IDNSRequest, ByRef resultName As JHSoftware.SimpleDNS.Plugin.DomainName, ByRef resultTTL As Integer) Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.LookupReverse
-    Dim qip = req.QNameIP
+  Public Function LookupReverse(qip As SdnsIP, req As IDNSRequest) As Task(Of LookupResult(Of DomName)) Implements ILookupReverse.LookupReverse
+    Return Task.FromResult(LookupReverse2(qip, req))
+  End Function
+  Public Function LookupReverse2(qip As SdnsIP, req As IDNSRequest) As LookupResult(Of DomName)
+    Dim rName As DomName
     If qip.IPVersion = 4 Then
-      If Not MyData.Rev4.TryGetValue(DirectCast(qip, IPAddressV4), resultName) Then resultName = Nothing
+      If Not MyData.Rev4.TryGetValue(DirectCast(qip, SdnsIPv4), rName) Then Return Nothing
     Else
-      If Not MyData.Rev6.TryGetValue(DirectCast(qip, IPAddressV6), resultName) Then resultName = Nothing
+      If Not MyData.Rev6.TryGetValue(DirectCast(qip, SdnsIPv6), rName) Then Return Nothing
     End If
-    resultTTL = MyCfg.TTL
-  End Sub
+    Return New LookupResult(Of DomName) With {.Value = rName, .TTL = MyCfg.TTL}
+  End Function
 
-  Public Function GetOptionsUI(ByVal instanceID As Guid, ByVal dataPath As String) As JHSoftware.SimpleDNS.Plugin.OptionsUI Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.GetOptionsUI
+  Public Function GetOptionsUI(ByVal instanceID As Guid, ByVal dataPath As String) As JHSoftware.SimpleDNS.Plugin.OptionsUI Implements JHSoftware.SimpleDNS.Plugin.IOptionsUI.GetOptionsUI
     Return New OptionsCtrl
   End Function
 
-  Public Function InstanceConflict(ByVal config1 As String, ByVal config2 As String, ByRef errorMsg As String) As Boolean Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.InstanceConflict
+  Public Function InstanceConflict(ByVal config1 As String, ByVal config2 As String, ByRef errorMsg As String) As Boolean Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.InstanceConflict
     Dim cfg1 = HFConfig.FromString(config1)
     Dim cfg2 = HFConfig.FromString(config2)
     If cfg1.FileName.ToLower = cfg2.FileName.ToLower Then
@@ -160,42 +161,30 @@ Public Class HostsFilePlugIn
     Try
 
       If DateTime.UtcNow.Subtract(LastReload).TotalSeconds < 5 Then Exit Sub
-      RaiseEvent LogLine("Hosts file update detected - reloading")
+      Host.LogLine("Hosts file update detected - reloading")
       Try
         Load()
       Catch ex As Exception
         MyData = New HostsData
-        RaiseEvent LogLine("Error reloading data file: " & ex.Message)
+        Host.LogLine("Error reloading data file: " & ex.Message)
       End Try
 
     Catch ex As Exception
-      RaiseEvent AsyncError(ex)
+      Host.AsyncError(ex)
     End Try
   End Sub
 
-  Public Function GetDNSAskAbout() As JHSoftware.SimpleDNS.Plugin.DNSAskAboutGH Implements JHSoftware.SimpleDNS.Plugin.IGetHostPlugIn.GetDNSAskAbout
-    GetDNSAskAbout = New JHSoftware.SimpleDNS.Plugin.DNSAskAboutGH
-    With GetDNSAskAbout
-      .ForwardIPv4 = True
-      .ForwardIPv6 = True
-      .RevIPv4Addr = IPAddressV4.Any
-      .RevIPv4MaskSize = 0
-      .RevIPv6Addr = IPAddressV6.Any
-      .RevIPv6MaskSize = 0
-    End With
-  End Function
-
-  Public Function ListsIPAddress(ByVal ip As IPAddress) As Boolean Implements JHSoftware.SimpleDNS.Plugin.IListsIPAddress.ListsIPAddress
+  Public Function ListsIPAddress(ByVal ip As SdnsIP) As Task(Of Boolean) Implements JHSoftware.SimpleDNS.Plugin.IListsIPAddress.ListsIPAddress
     If ip.IPVersion = 4 Then
-      Return MyData.Rev4.ContainsKey(DirectCast(ip, IPAddressV4))
+      Return Task.FromResult(MyData.Rev4.ContainsKey(DirectCast(ip, SdnsIPv4)))
     Else
-      Return MyData.Rev6.ContainsKey(DirectCast(ip, IPAddressV6))
+      Return Task.FromResult(MyData.Rev6.ContainsKey(DirectCast(ip, SdnsIPv6)))
     End If
   End Function
 
-  Public Function ListsDomainName(ByVal domain As JHSoftware.SimpleDNS.Plugin.DomainName) As Boolean Implements JHSoftware.SimpleDNS.Plugin.IListsDomainName.ListsDomainName
-    If MyData.Fwd4.ContainsKey(domain) Then Return True
-    Return MyData.Fwd6.ContainsKey(domain)
+  Public Function ListsDomainName(ByVal domain As DomName) As Task(Of Boolean) Implements JHSoftware.SimpleDNS.Plugin.IListsDomainName.ListsDomainName
+    If MyData.Fwd4.ContainsKey(domain) Then Return Task.FromResult(True)
+    Return Task.FromResult(MyData.Fwd6.ContainsKey(domain))
   End Function
 
 End Class
@@ -240,8 +229,8 @@ Friend Class HFConfig
 End Class
 
 Friend Class HostsData
-  Friend Fwd4 As New Dictionary(Of DomainName, IPAddressV4)
-  Friend Fwd6 As New Dictionary(Of DomainName, IPAddressV6)
-  Friend Rev4 As New Dictionary(Of IPAddressV4, DomainName)
-  Friend Rev6 As New Dictionary(Of IPAddressV6, DomainName)
+  Friend Fwd4 As New Dictionary(Of DomName, SdnsIPv4)
+  Friend Fwd6 As New Dictionary(Of DomName, SdnsIPv6)
+  Friend Rev4 As New Dictionary(Of SdnsIPv4, DomName)
+  Friend Rev6 As New Dictionary(Of SdnsIPv6, DomName)
 End Class
