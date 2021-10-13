@@ -116,16 +116,16 @@ Public Class HostsFilePlugIn
     End If
   End Sub
 
-  Public Function LookupHost(req As IDNSRequest) As Task(Of LookupResult(Of SdnsIP)) Implements ILookupHost.LookupHost
-    Return Task.FromResult(LookupHost2(req))
+  Public Function LookupHost(name As DomName, ipv6 As Boolean, req As IDNSRequest) As Task(Of LookupResult(Of SdnsIP)) Implements ILookupHost.LookupHost
+    Return Task.FromResult(LookupHost2(name, ipv6, req))
   End Function
-  Public Function LookupHost2(req As IDNSRequest) As LookupResult(Of SdnsIP)
-    If req.QType = DNSRecType.A Then
-      Dim rIP As SdnsIPv4 = Nothing
-      If MyData.Fwd4.TryGetValue(req.QName, rIP) Then Return New LookupResult(Of SdnsIP) With {.Value = rIP, .TTL = MyCfg.TTL}
-    Else
+  Public Function LookupHost2(name As DomName, ipv6 As Boolean, req As IDNSRequest) As LookupResult(Of SdnsIP)
+    If ipv6 Then
       Dim rIP As SdnsIPv6 = Nothing
-      If MyData.Fwd6.TryGetValue(req.QName, rIP) Then Return New LookupResult(Of SdnsIP) With {.Value = rIP, .TTL = MyCfg.TTL}
+      If MyData.Fwd6.TryGetValue(name, rIP) Then Return New LookupResult(Of SdnsIP) With {.Value = rIP, .TTL = MyCfg.TTL}
+    Else
+      Dim rIP As SdnsIPv4 = Nothing
+      If MyData.Fwd4.TryGetValue(name, rIP) Then Return New LookupResult(Of SdnsIP) With {.Value = rIP, .TTL = MyCfg.TTL}
     End If
     Return Nothing
   End Function
