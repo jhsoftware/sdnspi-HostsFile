@@ -27,11 +27,11 @@ Public Class HostsFilePlugIn
 
 #End Region
 
-  Public Function GetPlugInTypeInfo() As JHSoftware.SimpleDNS.Plugin.IPlugInBase.PlugInTypeInfo Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.GetPlugInTypeInfo
+  Public Function GetPlugInTypeInfo() As JHSoftware.SimpleDNS.Plugin.IPlugInBase.PlugInTypeInfo Implements JHSoftware.SimpleDNS.Plugin.IPlugInBase.GetTypeInfo
     With GetPlugInTypeInfo
       .Name = "Hosts File"
       .Description = "Retrieve host and reverse records from a standard ""hosts"" file"
-      .InfoURL = "https://simpledns.plus/kb/178/hosts-file-plug-in"
+      .InfoURL = "https://simpledns.plus/plugin-hostsfile"
     End With
   End Function
 
@@ -116,10 +116,10 @@ Public Class HostsFilePlugIn
     End If
   End Sub
 
-  Public Function LookupHost(name As DomName, ipv6 As Boolean, req As IDNSRequest) As Task(Of LookupResult(Of SdnsIP)) Implements ILookupHost.LookupHost
+  Public Function LookupHost(name As DomName, ipv6 As Boolean, req As IRequestContext) As Task(Of LookupResult(Of SdnsIP)) Implements ILookupHost.LookupHost
     Return Task.FromResult(LookupHost2(name, ipv6, req))
   End Function
-  Public Function LookupHost2(name As DomName, ipv6 As Boolean, req As IDNSRequest) As LookupResult(Of SdnsIP)
+  Public Function LookupHost2(name As DomName, ipv6 As Boolean, req As IRequestContext) As LookupResult(Of SdnsIP)
     If ipv6 Then
       Dim rIP As SdnsIPv6 = Nothing
       If MyData.Fwd6.TryGetValue(name, rIP) Then Return New LookupResult(Of SdnsIP) With {.Value = rIP, .TTL = MyCfg.TTL}
@@ -130,10 +130,10 @@ Public Class HostsFilePlugIn
     Return Nothing
   End Function
 
-  Public Function LookupReverse(qip As SdnsIP, req As IDNSRequest) As Task(Of LookupResult(Of DomName)) Implements ILookupReverse.LookupReverse
+  Public Function LookupReverse(qip As SdnsIP, req As IRequestContext) As Task(Of LookupResult(Of DomName)) Implements ILookupReverse.LookupReverse
     Return Task.FromResult(LookupReverse2(qip, req))
   End Function
-  Public Function LookupReverse2(qip As SdnsIP, req As IDNSRequest) As LookupResult(Of DomName)
+  Public Function LookupReverse2(qip As SdnsIP, req As IRequestContext) As LookupResult(Of DomName)
     Dim rName As DomName
     If qip.IPVersion = 4 Then
       If Not MyData.Rev4.TryGetValue(DirectCast(qip, SdnsIPv4), rName) Then Return Nothing
